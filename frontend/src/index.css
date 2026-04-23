@@ -1,0 +1,94 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:         #050a0e;
+  --surface:    #0b1520;
+  --surface2:   #0f1f2e;
+  --border:     #1a3a55;
+  --accent:     #00d4ff;
+  --accent2:    #00ff88;
+  --accent3:    #ff4444;
+  --text:       #e8f4ff;
+  --text-muted: #6b8fa8;
+  --mono:       'Space Mono', monospace;
+  --sans:       'Syne', sans-serif;
+  --glow:       0 0 20px rgba(0, 212, 255, 0.25);
+  --glow2:      0 0 20px rgba(0, 255, 136, 0.2);
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+::selection { background: rgba(0,212,255,0.25); color: var(--text); }
+
+input, textarea, select {
+  font-family: var(--sans);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 10px 14px;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  font-size: 0.9rem;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(0,212,255,0.1);
+}
+
+button {
+  cursor: pointer;
+  font-family: var(--sans);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: none;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+a { color: inherit; text-decoration: none; }
+
+@keyframes scanline {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: var(--border); }
+  50%       { border-color: rgba(0,212,255,0.4); }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes glitch {
+  0%, 100% { clip-path: inset(0 0 100% 0); }
+  20%       { clip-path: inset(30% 0 50% 0); transform: translate(-4px, 0); }
+  40%       { clip-path: inset(60% 0 10% 0); transform: translate(4px, 0); }
+  60%       { clip-path: inset(10% 0 80% 0); transform: translate(-2px, 0); }
+  80%       { clip-path: inset(80% 0 5% 0);  transform: translate(2px, 0); }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
