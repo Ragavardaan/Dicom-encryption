@@ -1,0 +1,187 @@
+MEDCRYPT - ALGORITHMS (PSEUDOCODE)
+=================================
+
+------------------------------------------------------------
+ALGO 1: GAN KEY GENERATION (256 bytes)
+------------------------------------------------------------
+input : key_len_bytes = 256
+output: key_bytes[key_len_bytes]
+
+G, D  <- init_generator_discriminator()
+for epoch in 1..E:
+  z        <- sample_noise(batch)
+  fake_key <- G(z)
+  real_key <- sample_real_like_distribution(batch)
+  loss_D   <- BCE(D(real_key), 1) + BCE(D(fake_key), 0)
+  update(D, loss_D)
+
+  z2       <- sample_noise(batch)
+  fake2    <- G(z2)
+  loss_G   <- BCE(D(fake2), 1)
+  update(G, loss_G)
+
+key_bytes <- postprocess_to_bytes(G(sample_noise(1)), key_len_bytes)
+return key_bytes
+
+------------------------------------------------------------
+ALGO 2: DERIVE CHAOTIC PARAMETERS (from key)
+------------------------------------------------------------
+input : key_bytes[256]
+output: henon(x0,y0,a,b), tent(x0,mu)
+
+seed <- hash(key_bytes)                      // stable deterministic hash
+henon.x0 <- map_to_range(seed[0..7],  -1, 1)
+henon.y0 <- map_to_range(seed[8..15], -1, 1)
+henon.a  <- map_to_range(seed[16..23], 1.2, 1.6)
+henon.b  <- map_to_range(seed[24..31], 0.2, 0.4)
+
+tent.x0  <- map_to_range(seed[32..39], 0, 1)
+tent.mu  <- map_to_range(seed[40..47], 1.5, 2.0)
+return params
+
+------------------------------------------------------------
+ALGO 3: HENON MAP SEQUENCE
+------------------------------------------------------------
+input : x0,y0,a,b, n
+output: seq[n]
+
+x <- x0; y <- y0
+for i in 1..n:
+  x_next <- 1 - a*x*x + y
+  y_next <- b*x
+  x <- x_next; y <- y_next
+  seq[i] <- frac(abs(x))                      // keep in [0,1)
+return seq
+
+------------------------------------------------------------
+ALGO 4: TENT MAP SEQUENCE
+------------------------------------------------------------
+input : x0, mu, n
+output: seq[n]
+
+x <- x0
+for i in 1..n:
+  if x < 0.5: x <- mu*x
+  else      : x <- mu*(1 - x)
+  seq[i] <- frac(abs(x))                      // keep in [0,1)
+return seq
+
+------------------------------------------------------------
+ALGO 5: CONFUSION LAYER (CHAOTIC S-BOX)
+------------------------------------------------------------
+input : plaintext_bytes[N], key_bytes
+output: confused_bytes[N], sbox[256]
+
+seq <- henon_seq(key_bytes, n=256 + warmup)
+sbox <- argsort(seq[warmup..warmup+255])      // permutation 0..255
+for i in 0..N-1:
+  confused_bytes[i] <- sbox[plaintext_bytes[i]]
+return confused_bytes, sbox
+
+------------------------------------------------------------
+ALGO 6: DIFFUSION LAYER (PERMUTE + XOR STREAM)
+------------------------------------------------------------
+input : data_bytes[N], key_bytes
+output: cipher_bytes[N], perm[N], pad_len
+
+pad_len <- (16 - (N mod 16)) mod 16
+data_p  <- PKCS7_PAD(data_bytes, pad_len)
+
+perm_seq <- tent_seq(key_bytes, n=len(data_p) + warmup)
+perm <- fisher_yates_indices(len(data_p), perm_seq[warmup..])
+shuffled <- data_p[perm]
+
+ks <- henon_keystream_bytes(key_bytes, len(data_p))
+for i in 0..len(data_p)-1:
+  cipher_bytes[i] <- shuffled[i] XOR ks[i]
+return cipher_bytes, perm, pad_len
+
+------------------------------------------------------------
+ALGO 7: PEE EMBEDDING (Prediction Error Expansion)
+------------------------------------------------------------
+input : image_u8[H,W], payload_bits[M]
+output: stego_u8[H,W], bits_used, pee_map
+
+bits_used <- 0
+pee_map.orig_lsbs <- []
+pee_map.embed_idx <- []
+
+for each embeddable_pixel p at position (r,c) in scan_order:
+  pred <- MED_predictor(image_u8, r, c)
+  e    <- image_u8[r,c] - pred                // prediction error
+  if expandable(e) and bits_used < M:
+    b <- payload_bits[bits_used]
+    new_e <- 2*e + b
+    stego_u8[r,c] <- clamp(pred + new_e, 0, 255)
+    pee_map.embed_idx.append((r,c))
+    bits_used++
+  else:
+    stego_u8[r,c] <- image_u8[r,c]
+
+return stego_u8, bits_used, pee_map
+
+------------------------------------------------------------
+ALGO 8: PEE EXTRACTION + RESTORATION
+------------------------------------------------------------
+input : stego_u8[H,W], payload_len_bits, pee_map
+output: payload_bits[payload_len_bits], restored_u8[H,W]
+
+payload_bits <- []
+restored_u8  <- stego_u8.copy()
+
+for (r,c) in pee_map.embed_idx:
+  pred <- MED_predictor(restored_u8, r, c)
+  e2   <- restored_u8[r,c] - pred
+  b    <- e2 mod 2
+  e    <- floor(e2 / 2)
+  restored_u8[r,c] <- clamp(pred + e, 0, 255)
+  payload_bits.append(b)
+  if len(payload_bits) == payload_len_bits: break
+
+return payload_bits, restored_u8
+
+------------------------------------------------------------
+ALGO 9: DICOM PIPELINE (ENCRYPT)
+------------------------------------------------------------
+input : dicom_or_image_bytes, patient_fields
+output: encrypted_dicom_bytes, text_key_b64, image_key_b64
+
+text_key  <- GAN_generate_key(256)
+image_key <- GAN_generate_key(256)
+
+patient_text <- format_patient_text(patient_fields)
+ciphertext, perm, pad_len <- encrypt_text(patient_text, text_key)
+payload_blob <- pack(ciphertext, perm, pad_len)
+
+frames <- load_all_frames_as_uint8(dicom_or_image_bytes)
+orig_f0 <- frames[0]
+stego_f0, bits_used, pee_map <- pee_embed(orig_f0, payload_blob_bits)
+frames[0] <- stego_f0
+
+for each frame f:
+  frames[f] <- encrypt_pixels(frames[f], image_key)
+
+meta <- {payload_len, perms, pee_map, orig_dtype, vmin, vmax, version}
+encrypted_dicom_bytes <- write_dicom(frames, meta)
+return encrypted_dicom_bytes, b64(text_key), b64(image_key)
+
+------------------------------------------------------------
+ALGO 10: DICOM PIPELINE (DECRYPT)
+------------------------------------------------------------
+input : encrypted_dicom_bytes, text_key_b64, image_key_b64
+output: restored_dicom_bytes, patient_text
+
+frames, meta <- read_dicom_and_meta(encrypted_dicom_bytes)
+for each frame f:
+  frames[f] <- decrypt_pixels(frames[f], b64decode(image_key_b64), meta.perms[f])
+
+payload_bits, restored_f0 <- pee_extract(frames[0], meta.payload_len_bits, meta.pee_map)
+frames[0] <- restored_f0
+
+ciphertext, perm, pad_len <- unpack(payload_bits)
+patient_text <- decrypt_text(ciphertext, b64decode(text_key_b64), perm, pad_len)
+
+restored_frames <- denormalize_to_orig_dtype(frames, meta.vmin, meta.vmax, meta.orig_dtype)
+restored_dicom_bytes <- write_dicom(restored_frames, strip_private_tags=True)
+return restored_dicom_bytes, patient_text
+

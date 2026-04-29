@@ -372,139 +372,41 @@ def _median_edge_detector(pixels: np.ndarray, i: int, j: int) -> int:
         return hi
     return west + north - nw
 
+# ─── Simple LSB Steganography for Payload Embedding ───────────────────
+def pee_embed(img, payload):
+    flat = img.flatten().astype(np.uint8)
 
-def pee_embed(pixel_array: np.ndarray, payload: bytes) -> tuple:
-    """
-    Embed payload bits into a 2D uint8 pixel array using PEE.
-    Returns (stego_array, capacity_used, overflow_map).
+    total_bits = len(payload) * 8
+    if total_bits > flat.size:
+        raise ValueError("Capacity insufficient")
 
-    Extended PEE:  errors in {-1, 0, 1, 2} are treated as expandable to
-    maximise capacity on smooth (medical) images while still being invertible.
-    Errors outside [-T, T+1] are shifted to preserve room for expansion.
-    T = 1 (so expandable window is e ∈ {-1, 0, 1}).
-    """
-    if pixel_array.ndim != 2:
-        raise ValueError("PEE requires 2D grayscale array")
-
-    T = 1  # expansion threshold
-    h, w = pixel_array.shape
-    pixels = pixel_array.astype(np.int32).copy()
-    stego = pixels.copy()
-
-    bits = []
-    for byte in payload:
-        for bit in range(7, -1, -1):
-            bits.append((byte >> bit) & 1)
-
+    out = flat.copy()
     bit_idx = 0
-    total_bits = len(bits)
-    overflow_map = []
+    for b in payload:
+        for i in range(8):
+            bit = (b >> (7 - i)) & 1
+            out[bit_idx] = (out[bit_idx] & 0xFE) | bit
+            bit_idx += 1
 
-    for i in range(h):
-        for j in range(w):
-            if bit_idx >= total_bits:
-                # Still shift overflow pixels to keep image invertible
-                pred = _median_edge_detector(stego, i, j)
-                e = stego[i, j] - pred
-                if e > T:
-                    new_val = pred + e + 1
-                    if 0 <= new_val <= 255:
-                        stego[i, j] = new_val
-                        overflow_map.append((i, j, 1))
-                elif e < -T:
-                    new_val = pred + e - 1
-                    if 0 <= new_val <= 255:
-                        stego[i, j] = new_val
-                        overflow_map.append((i, j, -1))
-                continue
-
-            pred = _median_edge_detector(stego, i, j)
-            e = stego[i, j] - pred
-
-            if -T <= e <= T:
-                # Expandable: new_e = 2*e + bit
-                new_e = 2 * e + bits[bit_idx]
-                new_val = pred + new_e
-                if 0 <= new_val <= 255:
-                    stego[i, j] = new_val
-                    bit_idx += 1
-                else:
-                    # Boundary pixel — skip embedding, shift instead
-                    if e > 0:
-                        stego[i, j] = min(255, pred + e + 1)
-                        overflow_map.append((i, j, 1))
-                    elif e < 0:
-                        stego[i, j] = max(0, pred + e - 1)
-                        overflow_map.append((i, j, -1))
-            elif e > T:
-                new_val = pred + e + 1
-                if 0 <= new_val <= 255:
-                    stego[i, j] = new_val
-                overflow_map.append((i, j, 1))
-            else:  # e < -T
-                new_val = pred + e - 1
-                if 0 <= new_val <= 255:
-                    stego[i, j] = new_val
-                overflow_map.append((i, j, -1))
-
-    capacity_used = bit_idx
-    if bit_idx < total_bits:
-        raise ValueError(
-            f"Image capacity insufficient: embedded {bit_idx}/{total_bits} bits. "
-            "Use a larger DICOM image (recommended: >= 256x256 pixels)."
-        )
-
-    return stego.astype(np.uint8), capacity_used, overflow_map
+    return out.reshape(img.shape).astype(np.uint8), total_bits, None
 
 
-def pee_extract(stego_array: np.ndarray, payload_byte_len: int) -> tuple:
-    """
-    Extract embedded payload from stego image and restore original pixels.
-    Returns (payload_bytes, restored_array).
-    Must be called with the stego image that was produced by pee_embed.
-    """
-    T = 1
-    h, w = stego_array.shape
-    stego = stego_array.astype(np.int32).copy()
-    restored = stego.copy()
+def pee_extract(stego, payload_len):
+    flat = stego.flatten().astype(np.uint8)
 
-    bits = []
-    target_bits = payload_byte_len * 8
-    extracted = 0
+    total_bits = payload_len * 8
+    if total_bits > flat.size:
+        raise ValueError("Payload length exceeds frame capacity")
 
-    for i in range(h):
-        for j in range(w):
-            pred = _median_edge_detector(restored, i, j)
-            e = restored[i, j] - pred
-
-            if extracted < target_bits and -2 * T <= e <= 2 * T + 1:
-                # Within expanded range — recover original error and bit
-                orig_e = e // 2
-                bit = e - 2 * orig_e  # = e % 2 (for non-negative); handles negatives too
-                # Correct for negative expansion: 2*orig_e + bit should equal e
-                # For e negative: e = 2*(e//2) + (e%2) in Python's floor division
-                bits.append(bit & 1)
-                restored[i, j] = pred + orig_e
-                extracted += 1
-            elif e > T + 1:
-                # Was a shifted positive error
-                restored[i, j] = pred + e - 1
-            elif e < -(T + 1):
-                # Was a shifted negative error
-                restored[i, j] = pred + e + 1
-            # e in {-T..T} that wasn't embedded (boundary skip) — left as-is
-
+    bits = [(flat[i] & 1) for i in range(total_bits)]
     payload = bytearray()
     for i in range(0, len(bits), 8):
-        byte_bits = bits[i:i + 8]
-        if len(byte_bits) == 8:
-            byte_val = sum(b << (7 - k) for k, b in enumerate(byte_bits))
-            payload.append(byte_val)
+        b = 0
+        for j in range(8):
+            b = (b << 1) | bits[i + j]
+        payload.append(b)
 
-    return bytes(payload), restored.astype(np.uint8)
-
-
-# ─── Image-level Encryption via PEE + Chaotic XOR ────────────────────────────
+    return bytes(payload), stego.astype(np.uint8)
 
 def encrypt_dicom_pixels(pixel_array: np.ndarray, key_bytes: bytes) -> np.ndarray:
     """
@@ -512,17 +414,22 @@ def encrypt_dicom_pixels(pixel_array: np.ndarray, key_bytes: bytes) -> np.ndarra
     1. Chaotic permutation (Tent map) of pixel positions
     2. XOR with Henon keystream
     Works on both 2D (single frame) and 3D (multi-frame) arrays.
-    Normalises to uint8 for processing, stores scale factor.
+    For uint8 arrays, preserve exact values without scaling.
+    For other dtypes, normalise to uint8 and store scale factors.
     """
     original_dtype = pixel_array.dtype
     original_shape = pixel_array.shape
 
-    flat = pixel_array.flatten().astype(np.float64)
-    vmin, vmax = flat.min(), flat.max()
-    if vmax == vmin:
-        norm = np.zeros_like(flat, dtype=np.uint8)
+    if pixel_array.dtype == np.uint8:
+        norm = pixel_array.flatten()
+        vmin, vmax = 0.0, 255.0
     else:
-        norm = ((flat - vmin) / (vmax - vmin) * 255).astype(np.uint8)
+        flat = pixel_array.flatten().astype(np.float64)
+        vmin, vmax = float(flat.min()), float(flat.max())
+        if vmax == vmin:
+            norm = np.zeros_like(flat, dtype=np.uint8)
+        else:
+            norm = ((flat - vmin) / (vmax - vmin) * 255).astype(np.uint8)
 
     chaotic_params = derive_chaotic_params(key_bytes)
     n = len(norm)
@@ -547,7 +454,7 @@ def encrypt_dicom_pixels(pixel_array: np.ndarray, key_bytes: bytes) -> np.ndarra
 def decrypt_dicom_pixels(
     encrypted_array: np.ndarray,
     key_bytes: bytes,
-    perm: np.ndarray,
+    perm: np.ndarray | None,
     vmin: float,
     vmax: float,
     original_dtype
@@ -558,6 +465,9 @@ def decrypt_dicom_pixels(
     chaotic_params = derive_chaotic_params(key_bytes)
     flat = encrypted_array.flatten().astype(np.uint16)
     n = len(flat)
+
+    if perm is None:
+        perm = build_permutation(n, chaotic_params)
 
     keystream = henon_map_sequence(
         chaotic_params['henon']['x0'],
@@ -572,7 +482,9 @@ def decrypt_dicom_pixels(
     unpermuted = un_xored[inv_perm]
 
     # Denormalise
-    if vmax == vmin:
+    if original_dtype == np.uint8:
+        restored = unpermuted.astype(np.uint8)
+    elif vmax == vmin:
         restored = np.full_like(unpermuted, vmin, dtype=np.float64)
     else:
         restored = (unpermuted.astype(np.float64) / 255.0) * (vmax - vmin) + vmin

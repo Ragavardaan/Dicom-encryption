@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+﻿import React, { useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import styles from './DicomPage.module.css';
@@ -189,6 +189,18 @@ function EncryptPanel() {
     a.click();
   };
 
+  const downloadEmbeddedImage = () => {
+    if (!result?.embedded_frame0_png_b64) return;
+    const bin = atob(result.embedded_frame0_png_b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const blob = new Blob([arr], { type: 'image/png' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'embedded_frame0.png';
+    a.click();
+  };
+
   return (
     <div className={styles.panel}>
       {/* Left: Form */}
@@ -289,10 +301,70 @@ function EncryptPanel() {
                 <span className={styles.statVal}>{result.bits_embedded?.toLocaleString()}</span>
               </div>
               <div className={styles.statRow}>
+                <span>BPP rate:</span>
+                <span className={styles.statVal}>
+                  {typeof result.bpp === 'number' ? result.bpp.toFixed(8) : '—'}
+                </span>
+              </div>
+              <div className={styles.statRow}>
                 <span>Image shape:</span>
                 <span className={styles.statVal}>{result.image_shape?.join(' × ')} px</span>
               </div>
             </div>
+
+            {(result.original_frame0_png_b64 || result.embedded_frame0_png_b64) && (
+              <div className={styles.resultBlock}>
+                <div className={styles.resultBlockLabel}>Original vs Embedded (Frame 0)</div>
+                <div className={styles.imageCompare}>
+                  <div className={styles.imageCompareItem}>
+                    <div className={styles.imageCompareCaption}>Original</div>
+                    {result.original_frame0_png_b64 ? (
+                      <img className={styles.imageCompareImg} alt="Original frame 0"
+                        src={`data:image/png;base64,${result.original_frame0_png_b64}`} />
+                    ) : (
+                      <div className={styles.imageCompareMissing}>No preview</div>
+                    )}
+                  </div>
+                  <div className={styles.imageCompareItem}>
+                    <div className={styles.imageCompareCaption}>Embedded</div>
+                    {result.embedded_frame0_png_b64 ? (
+                      <img className={styles.imageCompareImg} alt="Embedded frame 0"
+                        src={`data:image/png;base64,${result.embedded_frame0_png_b64}`} />
+                    ) : (
+                      <div className={styles.imageCompareMissing}>No preview</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {result.embed_metrics && (
+              <div className={styles.resultBlock}>
+                <div className={styles.resultBlockLabel}>Embedding Quality Metrics</div>
+                <div className={styles.statRow}>
+                  <span>Accuracy (pixel match %):</span>
+                  <span className={styles.statVal}>{result.embed_metrics.pixel_match_pct}</span>
+                </div>
+                <div className={styles.statRow}>
+                  <span>MSE:</span>
+                  <span className={styles.statVal}>{result.embed_metrics.mse}</span>
+                </div>
+                <div className={styles.statRow}>
+                  <span>MAE:</span>
+                  <span className={styles.statVal}>{result.embed_metrics.mae}</span>
+                </div>
+                <div className={styles.statRow}>
+                  <span>PSNR (dB):</span>
+                  <span className={styles.statVal}>
+                    {result.embed_metrics.psnr_is_inf ? '∞' : result.embed_metrics.psnr_db}
+                  </span>
+                </div>
+                <div className={styles.statRow}>
+                  <span>SSIM (global):</span>
+                  <span className={styles.statVal}>{result.embed_metrics.ssim_global ?? '—'}</span>
+                </div>
+              </div>
+            )}
 
             <div className={styles.keySection}>
               <div className={styles.keyBox}>
@@ -326,6 +398,15 @@ function EncryptPanel() {
                   stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
               Download Encrypted DICOM
+            </button>
+
+            <button className={styles.downloadBtn} style={{ '--dl-color': '#00ff88' }}
+              onClick={downloadEmbeddedImage} disabled={!result.embedded_frame0_png_b64}>
+              <svg width="16" height="16" fill="none" viewBox="0 0 24 24">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              Download Embedded Image (PNG)
             </button>
 
             <div className={styles.keyWarning}>
